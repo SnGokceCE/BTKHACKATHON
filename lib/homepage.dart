@@ -1,11 +1,13 @@
- import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_test_app/geminichat_page.dart';
 import 'attendance_page.dart';
 import 'todopage.dart';
 import 'bookspage.dart';
 import 'examschedule_page.dart';
 import 'presentationproject.dart';
 import 'schedule_page.dart';
+import 'geminichat_page.dart'; // Chatbot sayfası
 
 class HomePage extends StatelessWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -28,6 +30,7 @@ class HomePage extends StatelessWidget {
             icon: const Icon(Icons.logout),
             onPressed: () async {
               await FirebaseAuth.instance.signOut();
+              Navigator.of(context).popUntil((route) => route.isFirst);
             },
           ),
         ],
@@ -41,7 +44,7 @@ class HomePage extends StatelessWidget {
               child: const Text('Devamsızlık Durumu'),
             ),
             ElevatedButton(
-              onPressed: () => _navigateTo(context,  ToDoPage()),
+              onPressed: () => _navigateTo(context, ToDoPage()),
               child: const Text('To-Do Listesi'),
             ),
             ElevatedButton(
@@ -59,6 +62,11 @@ class HomePage extends StatelessWidget {
             ElevatedButton(
               onPressed: () => _navigateTo(context, const SchedulePage()),
               child: const Text('Ders Programı'),
+            ),
+            ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            onPressed: () => _navigateTo(context,  GeminiChatPage()),
+            child: const Text('Yapay Zeka Asistanı'),
             ),
           ],
         ),
