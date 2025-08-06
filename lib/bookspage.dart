@@ -1,6 +1,12 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'pdf_viewer_page.dart';
 
 class BooksPage extends StatefulWidget {
   const BooksPage({Key? key}) : super(key: key);
@@ -17,6 +23,7 @@ class _BooksPageState extends State<BooksPage> {
   final TextEditingController authorController = TextEditingController();
   final TextEditingController pagesController = TextEditingController();
   bool isRead = false;
+  PlatformFile? selectedFile;
 
   String? userId;
 
@@ -29,6 +36,41 @@ class _BooksPageState extends State<BooksPage> {
     }
   }
 
+  Future<void> _pickFile() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf', 'docx', 'txt', 'epub'],
+    );
+
+    if (result != null && result.files.isNotEmpty) {
+      setState(() {
+        selectedFile = result.files.first;
+      });
+    }
+  }
+
+  Future<String?> _uploadFile(PlatformFile file) async {
+    try {
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('books/${userId!}/${file.name}');
+      await ref.putFile(File(file.path!));
+      return await ref.getDownloadURL();
+    } catch (e) {
+      print('Upload error: $e');
+      return null;
+    }
+  }
+
+  Future<void> _deleteFileFromStorage(String fileUrl) async {
+    try {
+      final ref = FirebaseStorage.instance.refFromURL(fileUrl);
+      await ref.delete();
+    } catch (e) {
+      print('Dosya silme hatası: $e');
+    }
+  }
+
   void _addBook() async {
     if (userId == null) return;
 
@@ -37,6 +79,12 @@ class _BooksPageState extends State<BooksPage> {
     final pages = int.tryParse(pagesController.text.trim()) ?? 0;
 
     if (title.isNotEmpty && author.isNotEmpty && pages > 0) {
+      String? fileUrl;
+
+      if (selectedFile != null) {
+        fileUrl = await _uploadFile(selectedFile!);
+      }
+
       await _firestore
           .collection('books')
           .doc(userId)
@@ -46,15 +94,17 @@ class _BooksPageState extends State<BooksPage> {
         'author': author,
         'pages': pages,
         'isRead': isRead,
+        'fileUrl': fileUrl,
+        'fileName': selectedFile?.name,
         'timestamp': FieldValue.serverTimestamp(),
       });
 
-      // Temizle
       titleController.clear();
       authorController.clear();
       pagesController.clear();
       setState(() {
         isRead = false;
+        selectedFile = null;
       });
 
       Navigator.of(context).pop();
@@ -65,8 +115,7 @@ class _BooksPageState extends State<BooksPage> {
     showDialog(
       context: context,
       builder: (_) {
-        // StatefulBuilder ile checkbox durumu yönetiliyor
-        return StatefulBuilder(builder: (context, setState) {
+        return StatefulBuilder(builder: (context, setStateDialog) {
           return AlertDialog(
             title: const Text('Yeni Kitap Ekle'),
             content: SingleChildScrollView(
@@ -91,7 +140,7 @@ class _BooksPageState extends State<BooksPage> {
                       Checkbox(
                         value: isRead,
                         onChanged: (val) {
-                          setState(() {
+                          setStateDialog(() {
                             isRead = val ?? false;
                           });
                         },
@@ -99,6 +148,22 @@ class _BooksPageState extends State<BooksPage> {
                       const Text('Okundu'),
                     ],
                   ),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      await _pickFile();
+                      setStateDialog(() {});
+                    },
+                    icon: const Icon(Icons.upload_file),
+                    label: const Text("Dosya Seç (PDF, DOCX...)"),
+                  ),
+                  if (selectedFile != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        selectedFile!.name,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -106,12 +171,12 @@ class _BooksPageState extends State<BooksPage> {
               TextButton(
                 onPressed: () {
                   Navigator.of(context).pop();
-                  // Temizle
                   titleController.clear();
                   authorController.clear();
                   pagesController.clear();
                   setState(() {
                     isRead = false;
+                    selectedFile = null;
                   });
                 },
                 child: const Text('İptal'),
@@ -127,15 +192,44 @@ class _BooksPageState extends State<BooksPage> {
     );
   }
 
-  void _deleteBook(String docId) {
+  void _deleteBook(String docId, String? fileUrl) async {
     if (userId == null) return;
 
-    _firestore
+    if (fileUrl != null) {
+      await _deleteFileFromStorage(fileUrl);
+    }
+
+    await _firestore
         .collection('books')
         .doc(userId)
         .collection('kitaplar')
         .doc(docId)
         .delete();
+  }
+
+  Future<void> _openPdfInApp(String url) async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final tempPath = '${tempDir.path}/temp.pdf';
+
+      final response = await Dio().download(url, tempPath);
+
+      if (response.statusCode == 200) {
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PdfViewerPage(filePath: tempPath),
+          ),
+        );
+      } else {
+        throw Exception("Dosya indirilemedi");
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("PDF açılamadı: $e")),
+      );
+    }
   }
 
   @override
@@ -174,12 +268,25 @@ class _BooksPageState extends State<BooksPage> {
               final author = data['author'] ?? '';
               final pages = data['pages'] ?? 0;
               final read = data['isRead'] ?? false;
+              final fileUrl = data['fileUrl'];
+              final docId = docs[index].id;
 
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: ListTile(
                   title: Text(title),
-                  subtitle: Text('$author - $pages sayfa'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('$author - $pages sayfa'),
+                      if (fileUrl != null)
+                        TextButton.icon(
+                          onPressed: () => _openPdfInApp(fileUrl),
+                          icon: const Icon(Icons.picture_as_pdf),
+                          label: const Text("Dosyayı Aç"),
+                        ),
+                    ],
+                  ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -189,7 +296,7 @@ class _BooksPageState extends State<BooksPage> {
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => _deleteBook(docs[index].id),
+                        onPressed: () => _deleteBook(docId, fileUrl),
                       ),
                     ],
                   ),
